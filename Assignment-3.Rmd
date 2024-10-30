@@ -1,0 +1,10 @@
+---
+output: pdf_document
+---
+
+# **BMEG 310 - Assignment 3**
+
+[**Group 6**]{.underline}\
+Ben Rever (36335339)\
+Dhairya Aggarwal (51529386)\
+Ella Zhang (21267455)
