@@ -8,3 +8,431 @@ output: pdf_document
 Ben Rever (36335339)\
 Dhairya Aggarwal (51529386)\
 Ella Zhang (21267455)
+
+### Q1. Sequencing Technologies
+
+Areas of high GC content are hard to sequence as the reads produced from these sections are hard to align as there is no way of differentiating where the reads originate from exactly. This could cause low coverage or depth in certain ares while trying to map the genome, creating poor read quality or uneven coverage.
+
+#### Q2. Global Alignment Exercise
+
+-   Match (same nucleotide): +1
+
+-   Transition (A \<-\> G or T \<-\> C): -1
+
+-   Transversion (A \<-\> T or A \<-\> C): -5
+
+-   Gap penalty: -2
+
+```{r}
+seq1 <- unlist(strsplit("ATCAC", ""))
+seq2 <- unlist(strsplit("ATTCGAC", ""))
+
+score_mat <- matrix(
+  c( 1, -5, -5, -1,
+    -5,  1, -1, -5,
+    -5, -1,  1, -5,
+    -1, -5, -5,  1),
+  nrow = 4, dimnames = list(c("A", "T", "C", "G"), c("A", "T", "C", "G"))
+)
+
+gap_penalty <- -2
+
+m <- length(seq1) + 1
+n <- length(seq2) + 1
+mat <- matrix(0, nrow = m, ncol = n)
+colnames(mat)[2:n] <- seq2
+rownames(mat)[2:m] <- seq1
+
+for (i in 2:m) {
+  mat[i, 1] <- mat[i - 1, 1] + gap_penalty
+}
+for (j in 2:n) {
+  mat[1, j] <- mat[1, j - 1] + gap_penalty
+}
+
+for (i in 2:m) {
+  for (j in 2:n) {
+    match_score <- score_mat[seq1[i - 1], seq2[j - 1]]
+    diag <- mat[i - 1, j - 1] + match_score
+    vert <- mat[i - 1, j] + gap_penalty
+    horz <- mat[i, j - 1] + gap_penalty
+    mat[i, j] <- max(diag, vert, horz)     
+  }
+}
+print("scored matrix")
+print(mat)
+```
+
+Traceback Alignment
+
+```{r}
+alignment1 <- ""
+alignment2 <- ""
+i <- m
+j <- n
+while (i > 1 || j > 1) {
+  current_score <- mat[i, j]
+  if (current_score == mat[i - 1, j - 1] + score_mat[seq1[i - 1], seq2[j - 1]]) {
+    alignment1 <- paste0(seq1[i - 1], alignment1)
+    alignment2 <- paste0(seq2[j - 1], alignment2)
+    i <- i - 1
+    j <- j - 1
+  } else if (i > 1 && current_score == mat[i - 1, j] + gap_penalty) {
+    alignment1 <- paste0(seq1[i - 1], alignment1)
+    alignment2 <- paste0("-", alignment2)
+    i <- i - 1
+  } else {
+    alignment1 <- paste0("-", alignment1)
+    alignment2 <- paste0(seq2[j - 1], alignment2)
+    j <- j - 1
+  }
+}
+
+print("One Possible Optimal Alignment:")
+cat(alignment1, "\n")
+cat(alignment2, "\n")
+```
+
+### Q3. Looking at the Metadata of an alignment (SAM) file
+
+#### Q3.1. According to the header table in section 1.3 of the BAM/SAM document in the appendix, what do the SN and LN tags indicate?
+
+```{r}
+sam <- read.csv("single_cell_RNA_seq_bam.sam", nrows=73, sep="\t", header=FALSE,fill=TRUE)
+```
+
+SN refers to the reference sequence name. The SN tags and all individual AN names in all \@SQ lines must be distinct.
+
+LN refers to the reference sequence length. Range: [1, 2\^31-1]
+
+#### Q3.2 What is the length of the X chromosome, in bp, for our alignment?
+
+```{r}
+length_of_x <- sam[sam$V2 == "SN:X", "V3"]
+cat(length_of_x)
+cat(" bp")
+```
+
+### Q4. Looking at the Reads of an alignment (SAM) file
+
+#### Q4.1 How many reads are there in this BAM file?
+
+```{r}
+sam <- read.csv("single_cell_RNA_seq_bam.sam", sep="\t", header = FALSE, comment.char = "@", col.names = paste0("V", seq_len(30)), fill = TRUE)
+sam <- sam[paste0(("V"), seq_len(11))]
+
+```
+
+```{r}
+cat("Number of reads: ")
+cat(nrow(sam))
+```
+
+#### Q4.2. Print out the 10th row of the dataframe to look at the format of a read.
+
+```{r}
+sam[10,]
+```
+
+Given the headers in the document, we can rename them:
+
+```{r}
+colnames(sam) <- c("QNAME", "FLAG", "RNAME", "POS", "MAPQ", "CIGAR", "RNEXT", "PNEXT", "TLEN", "SEQ", "QUAL")
+n <- (unique(sam$RNAME))
+n
+```
+
+-   We should look in the column V3 or "RNAME" to find the chromosome to which the read was aligned
+
+-   The column V11 corresponds to the base quality field in a BAM file. ASCII phred scaled base quality +33
+
+#### Q4.3. How many reads in this file align to chromosome X?
+
+```{r}
+X_reads <- sam[sam$RNAME == "X", ]
+cat("Number of reads that align to chromosome X: ")
+cat(nrow(X_reads))
+```
+
+#### Q4.4. What is the mean base quality (BQ) for reads aligning to chromosome X?
+
+```{r}
+Q_to_phred <- function(Q) {
+  return(as.integer(charToRaw(Q)) - 33)
+}
+
+phred_scores <- unlist(lapply(strsplit(X_reads$QUAL, ""), function(x) sapply(x, Q_to_phred)))
+
+mean_phred <- mean(phred_scores)
+cat("Mean Base Quality: ")
+cat(mean_phred)
+cat("Mean Percent error: ")
+cat(10^(mean_phred / (-10)) *100)
+cat("%")
+```
+
+#### Q4.5. Plot the distribution of BQs across all bases and reads as a boxplot. Comment on your observation.
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+Q_scores <- as.data.frame(sam$QUAL)
+colnames(Q_scores) <- "QUAL"
+
+ascii_to_quality <- function(ascii_str) {
+  sapply(strsplit(ascii_str, "")[[1]], function(char) {
+    as.numeric(charToRaw(char)) - 33  # ASCII to Phred quality score conversion
+  })
+}
+
+# Convert the column of strings into a data frame with positions
+quality_list <- lapply(Q_scores$QUAL, ascii_to_quality)
+long_quality_data <- do.call(rbind, lapply(seq_along(quality_list), function(i) {
+  data.frame(
+    Position = 1:length(quality_list[[i]]),
+    QualityScore = quality_list[[i]],
+    ReadID = i
+  )
+}))
+
+# Now plot
+quality_plot <- ggplot(long_quality_data, aes(x = factor(Position), y = QualityScore)) +
+  geom_boxplot(outlier.shape = NA, coef=5, fill = "lightblue", color = "darkblue") +  # Extend whiskers to max range
+  stat_summary(fun = mean, geom = "point", shape = 20, color = "red", size = 1) +
+  theme_minimal() +
+  ylim(0,40)+
+  labs(
+    title = "Base Quality Plot",
+    x = "Position on Read",
+    y = "Quality Score"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1, size = 6),
+    plot.title = element_text(hjust = 0.5)
+  )
+
+table(long_quality_data$Position,long_quality_data$QualityScore)
+# Display the plot
+print(quality_plot)
+
+
+```
+
+#### Q4.6. Referring to section 1.4 of the SAM/BAM documentation, what column contains the leftmost mapping position of the reads?
+
+V4 or header POS contains the leftmost mapping position of the reads (where the reads start relative to the mapping)
+
+#### Q4.7. The protein Hspa8 is located on chromosome 9 at bases 40801273 - 40805199. How many reads have their leftmost mapping position aligned within these coordinates?
+
+```{r}
+chrom9_reads <- sam[sam$RNAME == "9", ]
+Hspa8 <- which(chrom9_reads$POS > 40801273 & chrom9_reads$POS < 40805199)
+cat("Number of leftmost mapping position within range: ")
+cat(length(Hspa8))
+```
+
+#### Q4.8. Mapping quality is an indication of how well a read aligned to the reference genome during the alignment step of processing our library data. It is reported as an integer between 0 and 255. How many reads have mapping quality less than 50?
+
+```{r}
+map_qual <- which(sam$MAPQ < 50)
+cat("Reads with mapping quality of <50: ")
+cat(length(map_qual))
+```
+
+#### Q4.9. What is the mean mapping quality of the reads which have mapping quality less than 50?
+
+```{r}
+cat("Mean of map quality of reads with 50: ")
+cat(mean(sam$MAPQ[map_qual]))
+```
+
+Q4.10. (bonus): The genome of the mouse used in this experiment has been edited to include the DNA sequence for the protein 'tdTomato', which is a fluorophore. Count the number of reads which align to the tdTomato sequence. Assuming that these reads are accurate, would you expect this cell to emit fluorescently? What might be the purpose of modifying a genome to include a fluorophore?
+
+```{r}
+tdTomato <- which(sam$RNAME == "tdTomato")
+cat("Number of reads that align with tdTomato: ")
+cat(length(tdTomato))
+```
+
+Yes, this cell should emit the tdTomato flurorofore. This could be useful for tracking the genetically modified mouse line.
+
+### Q5. Investigating the Variants
+
+```{r message=FALSE}
+vcf_con <- file("RNA_seq_annotated_variants.vcf", open= "r")
+vcf_file <- readLines(vcf_con)
+close(vcf_con)
+vcf <- data.frame(vcf_file)
+header <- vcf[grepl("##", vcf$vcf_file), ]
+factor(header)
+variants <- read.csv("RNA_seq_annotated_variants.vcf", skip=length(header), 
+                     header=TRUE, sep = "\t")
+```
+
+#### Q5.1. For the first variant (row) in the dataframe, what is the reference allele base at the site, and what is the alternative allele called by Strelka?
+
+```{r}
+cat("Reference Allele: ", variants$REF[1], "\n")
+cat("Alternantive Allele:", variants$ALT[1])
+```
+
+#### Q5.2. Code to obtain the entirety of the ANN info value contents from the INFO field for the first variant.
+
+```{r}
+info_parts <- strsplit(variants$INFO[1], ";")[[1]]
+
+ann_info <- info_parts[grep("^ANN=", info_parts)]
+
+ann_contents <- sub("^ANN=", "", ann_info)
+
+print(ann_contents)
+```
+
+#### Q5.3. Based on the ANN value of the first variant, what does the 'Annotation' field tell us about this variant?
+
+```{r}
+matching_row <- grep("^##INFO=<ID=ANN", vcf$vcf_file)
+value_contents <- vcf[matching_row,]
+first_entry <- strsplit(ann_contents, ",")[[1]][1]
+cat(value_contents, "\n", first_entry, "\n")
+first_ent_values <- strsplit(first_entry, "\\|")
+cat("\n","The Annotation tells us that the variant is: ", first_ent_values[[1]][2])
+```
+
+#### Q5.4. Perform the parsing done in Q5.1-3 again on variant line 683. What gene would this variant affect?
+
+```{r}
+cat("Reference Allele: ", variants$REF[683], "\n")
+cat("Alternantive Allele:", variants$ALT[683], "\n")
+
+inf <- strsplit(variants$INFO[683], ";")[[1]]
+
+ann_inf <- inf[grep("^ANN=", inf)]
+
+ann_cont <- sub("^ANN=", "", ann_inf)
+
+first_ent <- strsplit(ann_cont, ",")[[1]][1]
+first_ent_val <- strsplit(first_ent, "\\|")
+cat("The Annotation tells us that the variant is: ", first_ent_val[[1]][2], "\n")
+
+cat("This variant is wihtin the gene: ",first_ent_val[[1]][4])
+
+```
+
+#### Q5.5. Within the entire VCF file, how many variants (in total) do we have per type (synonymous/nonsynonymous SNVs, frameshift indels, etc.)?
+
+```{r}
+info_col <- as.data.frame(variants$INFO)
+info_col$INFO<- strsplit(variants$INFO, ";")
+info_col$ANN <- as.character(lapply(info_col$INFO, function(vec) vec[startsWith(vec, "ANN")]))
+info_col$ANN <- strsplit(info_col$ANN, "\\|")
+all_variants <- sapply(info_col$ANN, function(x) x[2])
+all_variants <- unlist(lapply(all_variants, function(x) strsplit(x, "&")[[1]]))
+var_count <- as.data.frame(table(all_variants))
+var_count
+unique(all_variants)
+```
+
+#### Q5.6. What is a frameshift variant? Does it have a greater or lesser effect on the resultant protein than a missense variant? Why?
+
+A frameshift variant is a mutation that changes the reading frame of the mRNA during translation. This causes all codons downstream of the mutation to be read incorrectly leading to a completely different protein or early stop codon. A missense mutation is usually a single nucleotide polymorphism that causes a codon of one amino acid to be read and translated to a different amino acid. This usually doesnt have as great of an affect as frameshift mutations as it is just one amino acid different and probably wont have a great affect on the funciton of the protein.
+
+#### Q5.7. The number of intronic variants (compared to overall number of variants)?
+
+We are going to just choose the mutations that we would say are intronic
+
+```{r}
+intronic <-  c("intron_variant", 
+               "upstream_gene_variant", 
+               "intergenic_region", 
+               "downstream_gene_variant", 
+               "non_coding_transcript_exon_variant", 
+               "splice_region_variant", 
+               "splice_acceptor_variant")
+
+intronic_sum <- sum(var_count$Freq[var_count$all_variants %in% intronic])
+cat("Sum of intronic variants is: ", intronic_sum, "\n")
+cat("Compared to the total number of variants: ", length(all_variants), "\n")
+cat("This shows that the intronic variants account for", 
+    intronic_sum/length(all_variants)*100,"% of all variants")
+```
+
+Q5.8. List all the genes that have been affected by coding mutations and have high impact. What do you find that is interesting?
+
+```{r}
+mut_outcome <- sapply(info_col$ANN, function(x) x[8])
+cat("Types of variant outocmes:", paste(unique(mut_outcome), collapse = ", "))
+coding_ind <- which(mut_outcome=="protein_coding")
+
+impact <- sapply(info_col$ANN, function(x) x[3])
+impact_ind <- which(impact == "HIGH")
+same_genes <- intersect(coding_ind, impact_ind)
+
+all_genes <- sapply(info_col$ANN, function(x) x[4])
+impacted_genes <- all_genes[same_genes]
+cat("Genes affected by coding mutations and have high impact are: ", paste(impacted_genes, collapse = ", "))
+```
+
+These genes could be of interest in study of disease if they have a high impact and our protein encoding variants
+
+#### Q5.9. Consequences of short reads
+
+-   If he reads are too short to span longer insertions (\>60bp), this could lead to incomplete or ambiguous alignments.
+
+-   Mapping difficulties arise when the read doesn't align well to the reference due to the large insertion.
+
+-   The absence of spanning reads reduces the accuracy and confidence in detecting longer indels so you would have to increase your read depth drastically to try and increase accuracy or mappability.
+
+Q5.10. Variant Allele Frequency (VAF) is an important metric that helps us to measure how many DNA molecules in a given sample are carrying a given variant. It also helps to identify potential false-positive situations caused by incorrect base calls or alignment. VAF is calculated by The number of variant alleles /(The number of Variant alleles + The number of Reference alleles) In the form of a boxplot, plot the distribution of the VAFs across all the variants. How many variants have VAF \> 5%? How many of those variants (the ones with \>5% VAF) are in coding regions?
+
+```{r}
+allele_format <- as.data.frame(variants$FORMAT)
+colnames(allele_format) <- "FORMAT"
+allele_format<- strsplit(allele_format$FORMAT, ":")
+sample_metric <- as.data.frame(variants$ws20171223_MPs_tomatoMuscle8wkQuiescent201)
+colnames(sample_metric) <- "Sample"
+sample_metric<- strsplit(sample_metric$Sample, ":")
+allele_format[1:2]
+sample_metric[1:2]
+
+
+ad_values <- lapply(seq_along(allele_format), function(i) {
+  # Find the index of "AD" in the labels list
+  ad_index <- which(allele_format[[i]] == "AD")
+  
+  # Extract the metric value at that index from the corresponding metrics list
+  if (length(ad_index) > 0) {
+    return(sample_metric[[i]][ad_index])
+  } else {
+    return(NA)  # Return NA if "AD" is not found
+  }
+})
+ad_values <- strsplit(as.character(ad_values), ",")
+variant_alleles <- sapply(ad_values, function(x) as.numeric(x[1]))
+reference_alleles <- sapply(ad_values, function(x) as.numeric(x[2]))
+vaf <- variant_alleles / (variant_alleles + reference_alleles)
+
+vaf_select <- which(vaf > 0.05)
+
+num_prot <- length(intersect(coding_ind, vaf_select))
+
+library(ggplot2)
+
+vaf_df <- data.frame(VAF = vaf)
+
+# Create the boxplot
+ggplot(vaf_df, aes(x = "", y = VAF)) +
+  geom_boxplot() +
+  labs(title = "Distribution of VAFs",
+       y = "Variant Allele Frequency (VAF)",
+       x = "") +
+  theme_minimal()
+
+cat("Number of variants with a vaf > 5% is:", length(vaf_select), "\n")
+cat("Number of those that are protein coding: ", num_prot)
+
+```
+
+Hint: You will need to parse the genotype encoding field (GT:GQ:GQX:DP:DPF...) to get allele counts and then get VAF. To understand that column, look at the VCF Variant Call Format Document (GATK) section 5.
